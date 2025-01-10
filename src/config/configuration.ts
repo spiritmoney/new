@@ -1,3 +1,9 @@
+export const SystemConfigDTO = {
+  IS_PRODUCTION: 'NODE_ENV',
+  RENDER_URL: 'RENDER_URL',
+  PORT: 'PORT',
+} as const;
+
 export default () => ({
   telegram: {
     botToken: process.env.TELEGRAM_BOT_TOKEN,
@@ -33,4 +39,7 @@ export default () => ({
     secretKey: process.env.PAYSTACK_SECRET_KEY,
     publicKey: process.env.PAYSTACK_PUBLIC_KEY,
   },
+  isProduction: process.env.NODE_ENV === 'production',
+  renderUrl: process.env.RENDER_URL,
+  port: parseInt(process.env.PORT, 10) || 3000,
 });

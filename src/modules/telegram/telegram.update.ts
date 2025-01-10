@@ -2,7 +2,10 @@ import { Update, Ctx, Start, Command, Action, On } from 'nestjs-telegraf';
 import { Context } from './interfaces/context.interface';
 import { Markup } from 'telegraf';
 import { TransactionService } from '../transaction/transaction.service';
-import { TransactionStatus, CryptoCurrency } from '../transaction/interfaces/transaction.interface';
+import {
+  TransactionStatus,
+  CryptoCurrency,
+} from '../transaction/interfaces/transaction.interface';
 import { BankDetailsDto } from '../transaction/dto/bank-details.dto';
 import { Logger } from '@nestjs/common';
 import { RatesService } from '../rates/rates.service';
@@ -34,9 +37,8 @@ export class TelegramUpdate {
       Markup.keyboard([
         ['💰 Buy', '💱 Sell'],
         ['📊 Rates', '📈 Status'],
-        ['❌ Cancel']
-      ])
-      .resize()
+        ['❌ Cancel'],
+      ]).resize(),
     );
   }
 
@@ -74,7 +76,7 @@ export class TelegramUpdate {
   @Command('buy')
   async buy(@Ctx() ctx: Context) {
     this.logger.debug('Buy command handler triggered');
-    
+
     if (!ctx.session) {
       ctx.session = {
         __scenes: {},
@@ -85,7 +87,7 @@ export class TelegramUpdate {
     }
 
     ctx.session.state.action = 'BUY';
-    
+
     await ctx.reply(
       'Select coin you want to buy',
       Markup.inlineKeyboard([
@@ -114,7 +116,9 @@ export class TelegramUpdate {
       )
       .join('\n');
 
-    await ctx.reply('📊 Current Rates:\n\n' + ratesList, { parse_mode: 'Markdown' });
+    await ctx.reply('📊 Current Rates:\n\n' + ratesList, {
+      parse_mode: 'Markdown',
+    });
   }
 
   @Command('status')
@@ -181,10 +185,10 @@ export class TelegramUpdate {
   @Action(/coin_(.+)/)
   async handleCoinSelection(@Ctx() ctx: Context) {
     this.logger.debug('Coin selection handler triggered');
-    
+
     // Clear the coin selection keyboard
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
-    
+
     if (!ctx.session?.state?.action) {
       this.logger.debug('No action in session state during coin selection');
       await ctx.reply('Please start a new transaction using /buy or /sell');
@@ -193,7 +197,7 @@ export class TelegramUpdate {
 
     const coin = ctx.match[1] as CryptoCurrency;
     ctx.session.state.selectedCoin = coin;
-    
+
     this.logger.debug(`Selected coin: ${coin}`);
     this.logger.debug(`Action type: ${ctx.session.state.action}`);
     this.logger.debug(`Session state: ${JSON.stringify(ctx.session.state)}`);
@@ -204,17 +208,21 @@ export class TelegramUpdate {
     try {
       await ctx.reply(
         `Selected coin: *${this.ratesService.getCurrencyDisplayName(coin)}*\n\n` +
-        `Enter the amount you want to ${actionText}\n` +
-        'Eg: 1000\n\n' +
-        `*Note: ${maxAmount}USDT is the max amount you can ${actionText}*`,
-        { parse_mode: 'Markdown' }
+          `Enter the amount you want to ${actionText}\n` +
+          'Eg: 1000\n\n' +
+          `*Note: ${maxAmount}USDT is the max amount you can ${actionText}*`,
+        { parse_mode: 'Markdown' },
       );
 
-      await ctx.answerCbQuery(`Selected ${this.ratesService.getCurrencyDisplayName(coin)}`);
+      await ctx.answerCbQuery(
+        `Selected ${this.ratesService.getCurrencyDisplayName(coin)}`,
+      );
       this.logger.debug('Coin selection completed successfully');
     } catch (error) {
       this.logger.error('Error in coin selection:', error);
-      await ctx.reply('An error occurred. Please try again or use /cancel to start over.');
+      await ctx.reply(
+        'An error occurred. Please try again or use /cancel to start over.',
+      );
     }
   }
 
@@ -231,20 +239,22 @@ export class TelegramUpdate {
   @Action(/bank_(.+)/)
   async handleBankSelection(@Ctx() ctx: Context) {
     const bankCode = ctx.match[1];
-    
+
     // Clear the bank selection keyboard
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
-    
+
     // Get bank name from code and show confirmation
     const banks = await this.bankService.getBankList();
-    const selectedBank = banks.find(bank => bank.code === bankCode);
-    await ctx.reply(`Selected bank: *${selectedBank.name}*`, { parse_mode: 'Markdown' });
-    
+    const selectedBank = banks.find((bank) => bank.code === bankCode);
+    await ctx.reply(`Selected bank: *${selectedBank.name}*`, {
+      parse_mode: 'Markdown',
+    });
+
     if (ctx.session.state.action === 'BUY') {
       try {
         // Map network-specific tokens to base currencies using the enum
         let cryptoCurrency: CryptoCurrency;
-        
+
         if (ctx.session.state.selectedCoin.startsWith('USDT')) {
           cryptoCurrency = 'USDT' as CryptoCurrency;
         } else if (ctx.session.state.selectedCoin.startsWith('USDC')) {
@@ -261,7 +271,7 @@ export class TelegramUpdate {
           userId: ctx.from.id,
           amount: ctx.session.state.amount,
           cryptoCurrency,
-          walletAddress: ctx.session.state.walletAddress
+          walletAddress: ctx.session.state.walletAddress,
         });
 
         // Create buy transaction with proper enum value
@@ -269,7 +279,7 @@ export class TelegramUpdate {
           userId: ctx.from.id,
           amount: ctx.session.state.amount,
           cryptoCurrency,
-          walletAddress: ctx.session.state.walletAddress
+          walletAddress: ctx.session.state.walletAddress,
         });
 
         // Get bank details for payment
@@ -277,30 +287,31 @@ export class TelegramUpdate {
 
         await ctx.reply(
           'Please confirm the transaction details:\n\n' +
-          '------------------------------\n' +
-          `Amount to Send: *₦${ctx.session.state.nairaAmount.toLocaleString()}*\n` +
-          `You will receive: *${transaction.amount} ${this.ratesService.getCurrencyDisplayName(transaction.cryptoCurrency)}*\n` +
-          'Wallet Address:\n' +
-          `\`${transaction.walletAddress}\`\n` +
-          '------------------------------\n\n' +
-          'Make payment to:\n' +
-          `Account Name: *${paymentDetails.accountName}*\n` +
-          `Bank: *${paymentDetails.bankName}*\n` +
-          'Account Number:\n' +
-          `\`${paymentDetails.accountNumber}\`\n\n` +
-          'Note: Crypto will be sent to your wallet immediately after payment confirmation.\n\n' +
-          'Use /confirm after making the payment.\n\n' +
-          'This quote expires in 30 minutes.\n\n' +
-          `*${this.formatCountdown(transaction.expiresAt.getTime())}*`,
-          { parse_mode: 'Markdown' }
+            '------------------------------\n' +
+            `Amount to Send: *₦${ctx.session.state.nairaAmount.toLocaleString()}*\n` +
+            `You will receive: *${transaction.amount} ${this.ratesService.getCurrencyDisplayName(transaction.cryptoCurrency)}*\n` +
+            'Wallet Address:\n' +
+            `\`${transaction.walletAddress}\`\n` +
+            '------------------------------\n\n' +
+            'Make payment to:\n' +
+            `Account Name: *${paymentDetails.accountName}*\n` +
+            `Bank: *${paymentDetails.bankName}*\n` +
+            'Account Number:\n' +
+            `\`${paymentDetails.accountNumber}\`\n\n` +
+            'Note: Crypto will be sent to your wallet immediately after payment confirmation.\n\n' +
+            'Use /confirm after making the payment.\n\n' +
+            'This quote expires in 30 minutes.\n\n' +
+            `*${this.formatCountdown(transaction.expiresAt.getTime())}*`,
+          { parse_mode: 'Markdown' },
         );
 
         // Start countdown timer
         this.startExpiryCountdown(ctx, transaction.expiresAt.getTime());
-        
       } catch (error) {
         this.logger.error('Error creating buy transaction:', error);
-        await ctx.reply('An error occurred. Please try again or contact support.');
+        await ctx.reply(
+          'An error occurred. Please try again or contact support.',
+        );
       }
       return;
     }
@@ -308,7 +319,7 @@ export class TelegramUpdate {
     // Handle SELL flow
     const bankDetails = await this.bankService.verifyAccountNumber(
       ctx.session.state.accountNumber,
-      bankCode
+      bankCode,
     );
 
     if (!bankDetails) {
@@ -455,7 +466,9 @@ export class TelegramUpdate {
     }
 
     this.logger.debug(`Received text: ${ctx.message.text}`);
-    this.logger.debug(`Current session state: ${JSON.stringify(ctx.session?.state)}`);
+    this.logger.debug(
+      `Current session state: ${JSON.stringify(ctx.session?.state)}`,
+    );
 
     // Ensure session state exists
     if (!ctx.session?.state) {
@@ -562,7 +575,7 @@ export class TelegramUpdate {
           `You send: *${amount.toLocaleString()} ${this.ratesService.getCurrencyDisplayName(ctx.session.state.selectedCoin)}*\n` +
           `You get: *₦${fiatAmount.toLocaleString()}*\n\n` +
           'Please enter your account number:',
-        { parse_mode: 'Markdown' }
+        { parse_mode: 'Markdown' },
       );
       ctx.session.state.awaitingAccountNumber = true;
       this.logger.debug('Awaiting account number');
@@ -594,7 +607,7 @@ export class TelegramUpdate {
           `You send: *₦${fiatAmount.toLocaleString()}*\n` +
           `You get: *${amount.toLocaleString()} ${this.ratesService.getCurrencyDisplayName(ctx.session.state.selectedCoin)}*\n\n` +
           'Enter your wallet address:',
-        { parse_mode: 'Markdown' }
+        { parse_mode: 'Markdown' },
       );
       ctx.session.state.awaitingWalletAddress = true;
       this.logger.debug('Awaiting wallet address');

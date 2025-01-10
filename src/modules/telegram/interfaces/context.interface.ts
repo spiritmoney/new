@@ -23,4 +23,4 @@ export interface Context extends Scenes.SceneContext {
     state: CustomSessionData;
   };
   match: RegExpExecArray | null;
-} 
+}

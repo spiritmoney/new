@@ -11,6 +11,7 @@ import { TransactionRepository } from './modules/transaction/transaction.reposit
 import configuration from './config/configuration';
 import { TRANSACTION_REPOSITORY } from './modules/transaction/constants/transaction.constants';
 import { session } from 'telegraf';
+import { KeepaliveService } from './services/keepalive/KeepaliveService';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { session } from 'telegraf';
       provide: TRANSACTION_REPOSITORY,
       useClass: TransactionRepository,
     },
+    KeepaliveService,
   ],
 })
 export class AppModule {}
