@@ -14,16 +14,10 @@ export class KeepaliveService implements OnModuleInit, OnModuleDestroy {
   constructor(private configService: ConfigService) {}
 
   async onModuleInit() {
-    const isProduction = this.configService.get<boolean>(SystemConfigDTO.IS_PRODUCTION);
-    
-    if (isProduction) {
-      // Wait a bit for the server to fully start
-      setTimeout(async () => {
-        await this.initializeHealthCheck();
-      }, 5000); // Wait 5 seconds before first check
-    } else {
-      this.logger.log('Keepalive service not started in development mode');
-    }
+    // Wait a bit for the server to fully start
+    setTimeout(async () => {
+      await this.initializeHealthCheck();
+    }, 5000); // Wait 5 seconds before first check
   }
 
   onModuleDestroy() {
@@ -36,7 +30,8 @@ export class KeepaliveService implements OnModuleInit, OnModuleDestroy {
     while (retries < this.MAX_RETRIES) {
       if (await this.checkHealth()) {
         this.startKeepalive();
-        this.logger.log('Keepalive service started successfully for Render deployment');
+        const isProduction = this.configService.get<boolean>(SystemConfigDTO.IS_PRODUCTION);
+        this.logger.log(`Keepalive service started successfully in ${isProduction ? 'production' : 'development'} mode`);
         return;
       }
       retries++;
@@ -50,21 +45,45 @@ export class KeepaliveService implements OnModuleInit, OnModuleDestroy {
 
   private async checkHealth(): Promise<boolean> {
     try {
+      const isProduction = this.configService.get<boolean>(SystemConfigDTO.IS_PRODUCTION);
+      const port = this.configService.get('port');
       const renderUrl = this.configService.get(SystemConfigDTO.RENDER_URL);
-      const baseUrl = renderUrl || `http://localhost:${this.configService.get('port')}`;
       
-      const response = await fetch(`${baseUrl}/health`);
-      
-      if (!response.ok) {
-        this.logger.warn(`Health check failed with status: ${response.status}`);
-        return false;
+      // In development, always use localhost
+      // In production, try localhost first, then fallback to RENDER_URL
+      const urls = isProduction 
+        ? [`http://localhost:${port}`, renderUrl]
+        : [`http://localhost:${port}`];
+
+      for (const baseUrl of urls) {
+        if (!baseUrl) continue;
+        
+        const sanitizedBaseUrl = baseUrl.replace(/\/+$/, '');
+        const healthUrl = `${sanitizedBaseUrl}/health`;
+        
+        this.logger.debug(`Checking health at URL: ${healthUrl}`);
+        
+        try {
+          const response = await fetch(healthUrl);
+          
+          if (response.ok) {
+            const data = await response.json();
+            this.logger.debug('Health check successful:', data);
+            return true;
+          }
+          
+          this.logger.warn(`Health check failed with status: ${response.status} ${response.statusText}`);
+        } catch (error) {
+          this.logger.warn(`Failed to connect to ${healthUrl}:`, error.message);
+        }
       }
       
-      const data = await response.json();
-      this.logger.debug('Health check successful:', data);
-      return true;
+      return false;
     } catch (error) {
       this.logger.error('Health check failed:', error.message);
+      if (error.cause) {
+        this.logger.error('Error cause:', error.cause);
+      }
       return false;
     }
   }

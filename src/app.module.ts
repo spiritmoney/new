@@ -12,6 +12,8 @@ import configuration from './config/configuration';
 import { TRANSACTION_REPOSITORY } from './modules/transaction/constants/transaction.constants';
 import { session } from 'telegraf';
 import { KeepaliveService } from './services/keepalive/KeepaliveService';
+import { AppController } from './app.controller';
+import { AppService } from './app.service';
 
 @Module({
   imports: [
@@ -38,7 +40,9 @@ import { KeepaliveService } from './services/keepalive/KeepaliveService';
       inject: [ConfigService],
     }),
   ],
+  controllers: [AppController],
   providers: [
+    AppService,
     TelegramUpdate,
     TransactionService,
     WalletService,
