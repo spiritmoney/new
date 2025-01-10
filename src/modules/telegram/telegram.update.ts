@@ -124,10 +124,17 @@ export class TelegramUpdate {
   @Command('status')
   async status(@Ctx() ctx: Context) {
     await ctx.reply(
-      '🤖 Bot Status: Active\n' +
-        '📈 24h Volume: $XXX,XXX\n' +
-        '🔄 Trades: XXX\n' +
-        '⚡ Response Time: XXms',
+      '🤖 Bot Status: *Active*\n' +
+        '📈 24h Volume: *$XXX,XXX*\n' +
+        '🔄 Trades: *XXX*\n' +
+        '⚡ Response Time: *100ms*\n\n' +
+        '💰 Fiat Pool: *₦XX,XXX,XXX*\n' +
+        '🪙 Coin Pool:\n' +
+        '  • USDT: *XXX,XXX*\n' +
+        '  • USDC: *XXX,XXX*\n' +
+        '  • BTC: *X.XXX*\n' +
+        '  • ETH: *XX.XX*',
+      { parse_mode: 'Markdown' }
     );
   }
 
