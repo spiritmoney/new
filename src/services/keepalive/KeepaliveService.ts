@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleInit,
+  OnModuleDestroy,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import fetch from 'node-fetch';
 import { SystemConfigDTO } from '../../config/configuration';
@@ -30,54 +35,66 @@ export class KeepaliveService implements OnModuleInit, OnModuleDestroy {
     while (retries < this.MAX_RETRIES) {
       if (await this.checkHealth()) {
         this.startKeepalive();
-        const isProduction = this.configService.get<boolean>(SystemConfigDTO.IS_PRODUCTION);
-        this.logger.log(`Keepalive service started successfully in ${isProduction ? 'production' : 'development'} mode`);
+        const isProduction = this.configService.get<boolean>(
+          SystemConfigDTO.IS_PRODUCTION,
+        );
+        this.logger.log(
+          `Keepalive service started successfully in ${isProduction ? 'production' : 'development'} mode`,
+        );
         return;
       }
       retries++;
       if (retries < this.MAX_RETRIES) {
-        this.logger.log(`Retrying health check in ${this.RETRY_DELAY/1000} seconds... (Attempt ${retries + 1}/${this.MAX_RETRIES})`);
-        await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY));
+        this.logger.log(
+          `Retrying health check in ${this.RETRY_DELAY / 1000} seconds... (Attempt ${retries + 1}/${this.MAX_RETRIES})`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, this.RETRY_DELAY));
       }
     }
-    this.logger.error('Failed to initialize health check after maximum retries');
+    this.logger.error(
+      'Failed to initialize health check after maximum retries',
+    );
   }
 
   private async checkHealth(): Promise<boolean> {
     try {
-      const isProduction = this.configService.get<boolean>(SystemConfigDTO.IS_PRODUCTION);
+      const isProduction = this.configService.get<boolean>(
+        SystemConfigDTO.IS_PRODUCTION,
+      );
       const port = this.configService.get('port');
       const renderUrl = this.configService.get(SystemConfigDTO.RENDER_URL);
-      
+
       // In development, always use localhost
       // In production, try localhost first, then fallback to RENDER_URL
-      const urls = isProduction 
+      const urls = isProduction
         ? [`http://localhost:${port}`, renderUrl]
         : [`http://localhost:${port}`];
 
       for (const baseUrl of urls) {
         if (!baseUrl) continue;
-        
+
         const sanitizedBaseUrl = baseUrl.replace(/\/+$/, '');
         const healthUrl = `${sanitizedBaseUrl}/health`;
-        
+
         this.logger.debug(`Checking health at URL: ${healthUrl}`);
-        
+
         try {
           const response = await fetch(healthUrl);
-          
+
           if (response.ok) {
             const data = await response.json();
             this.logger.debug('Health check successful:', data);
             return true;
           }
-          
-          this.logger.warn(`Health check failed with status: ${response.status} ${response.statusText}`);
+
+          this.logger.warn(
+            `Health check failed with status: ${response.status} ${response.statusText}`,
+          );
         } catch (error) {
           this.logger.warn(`Failed to connect to ${healthUrl}:`, error.message);
         }
       }
-      
+
       return false;
     } catch (error) {
       this.logger.error('Health check failed:', error.message);
@@ -97,7 +114,9 @@ export class KeepaliveService implements OnModuleInit, OnModuleDestroy {
       await this.checkHealth();
     }, this.KEEPALIVE_INTERVAL);
 
-    this.logger.log(`Keepalive service will ping every ${this.KEEPALIVE_INTERVAL / 60000} minutes`);
+    this.logger.log(
+      `Keepalive service will ping every ${this.KEEPALIVE_INTERVAL / 60000} minutes`,
+    );
   }
 
   private stopKeepalive() {
@@ -106,4 +125,4 @@ export class KeepaliveService implements OnModuleInit, OnModuleDestroy {
       this.keepaliveInterval = null;
     }
   }
-} 
+}

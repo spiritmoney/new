@@ -16,6 +16,7 @@ import * as moment from 'moment';
 export class TelegramUpdate {
   private readonly logger = new Logger(TelegramUpdate.name);
   private readonly EXPIRY_TIME = 30 * 60 * 1000; // 30 minutes in milliseconds
+  private countdownIntervals: Map<number, NodeJS.Timeout> = new Map(); // Track intervals by chat ID
 
   constructor(
     private readonly transactionService: TransactionService,
@@ -252,25 +253,24 @@ export class TelegramUpdate {
 
     // Get bank name from code and show confirmation
     const banks = await this.bankService.getBankList();
-    const selectedBank = banks.find((bank) => bank.code === bankCode);
-    await ctx.reply(`Selected bank: *${selectedBank.name}*`, {
-      parse_mode: 'Markdown',
-    });
+    const selectedBank = banks.find(bank => bank.code === bankCode);
+    await ctx.reply(`Selected bank: *${selectedBank.name}*`, { parse_mode: 'Markdown' });
 
     if (ctx.session.state.action === 'BUY') {
       try {
-        // Map network-specific tokens to base currencies using the enum
-        let cryptoCurrency: CryptoCurrency;
+        // Map the selected coin to the correct enum value
+        const coinMap = {
+          'USDT_ERC20': CryptoCurrency.USDT_ERC20, // 'USDT(ERC-20)'
+          'USDT_TRC20': CryptoCurrency.USDT_TRC20, // 'USDT(TRC-20)'
+          'USDC_ERC20': CryptoCurrency.USDC_ERC20, // 'USDC(ERC-20)'
+          'USDC_TRC20': CryptoCurrency.USDC_TRC20, // 'USDC(TRC-20)'
+          'ETH': CryptoCurrency.ETH,
+          'BTC': CryptoCurrency.BTC
+        };
 
-        if (ctx.session.state.selectedCoin.startsWith('USDT')) {
-          cryptoCurrency = 'USDT' as CryptoCurrency;
-        } else if (ctx.session.state.selectedCoin.startsWith('USDC')) {
-          cryptoCurrency = 'USDC' as CryptoCurrency;
-        } else if (ctx.session.state.selectedCoin === 'BTC') {
-          cryptoCurrency = 'BTC' as CryptoCurrency;
-        } else if (ctx.session.state.selectedCoin === 'ETH') {
-          cryptoCurrency = 'ETH' as CryptoCurrency;
-        } else {
+        const cryptoCurrency = coinMap[ctx.session.state.selectedCoin];
+
+        if (!cryptoCurrency) {
           throw new Error('Unsupported cryptocurrency');
         }
 
@@ -278,15 +278,14 @@ export class TelegramUpdate {
           userId: ctx.from.id,
           amount: ctx.session.state.amount,
           cryptoCurrency,
-          walletAddress: ctx.session.state.walletAddress,
+          walletAddress: ctx.session.state.walletAddress
         });
 
-        // Create buy transaction with proper enum value
         const transaction = await this.transactionService.createBuyTransaction({
           userId: ctx.from.id,
           amount: ctx.session.state.amount,
           cryptoCurrency,
-          walletAddress: ctx.session.state.walletAddress,
+          walletAddress: ctx.session.state.walletAddress
         });
 
         // Get bank details for payment
@@ -307,8 +306,7 @@ export class TelegramUpdate {
             `\`${paymentDetails.accountNumber}\`\n\n` +
             'Note: Crypto will be sent to your wallet immediately after payment confirmation.\n\n' +
             'Use /confirm after making the payment.\n\n' +
-            'This quote expires in 30 minutes.\n\n' +
-            `*${this.formatCountdown(transaction.expiresAt.getTime())}*`,
+            'This quote expires in 30 minutes.\n\n',
           { parse_mode: 'Markdown' },
         );
 
@@ -375,23 +373,81 @@ export class TelegramUpdate {
     }
   }
 
-  private startExpiryCountdown(ctx: Context, expiryTime: number) {
+  private async startExpiryCountdown(ctx: Context, expiryTime: number) {
+    const chatId = ctx.chat.id;
+    
+    // Clear existing interval if any
+    if (this.countdownIntervals.has(chatId)) {
+        const existingInterval = this.countdownIntervals.get(chatId);
+        if (existingInterval) {
+            clearInterval(existingInterval);
+        }
+        this.countdownIntervals.delete(chatId);
+    }
+
+    // Send initial status message and store its message ID
+    const initialMessage = await ctx.reply(
+        'Transaction pending...\n' +
+        'Please complete the transaction before the timer expires.\n\n' +
+        `Time remaining: *${this.formatCountdown(expiryTime)}*`,
+        { parse_mode: 'Markdown' }
+    );
+
+    const messageId = initialMessage.message_id;
+
     const interval = setInterval(async () => {
-      const remaining = expiryTime - Date.now();
-      if (remaining <= 0) {
-        clearInterval(interval);
-        await ctx.reply('Transaction expired. Please start a new transaction.');
-        ctx.session = {
-          __scenes: {},
-          state: {},
-        };
-      } else {
-        await ctx.editMessageText(
-          // ... previous message content ...
-          `** ${this.formatCountdown(expiryTime)} **`,
-        );
-      }
-    }, 1000);
+        const remaining = expiryTime - Date.now();
+        
+        if (remaining <= 0) {
+            if (this.countdownIntervals.has(chatId)) {
+                const currentInterval = this.countdownIntervals.get(chatId);
+                if (currentInterval) {
+                    clearInterval(currentInterval);
+                }
+                this.countdownIntervals.delete(chatId);
+            }
+            await ctx.reply('⚠️ Transaction expired. Please start a new transaction.');
+            ctx.session = {
+                __scenes: {},
+                state: {},
+            };
+            return;
+        }
+
+        const countdown = this.formatCountdown(expiryTime);
+        
+        try {
+            const statusMessage = 
+                'Transaction pending...\n' +
+                'Please complete the transaction before the timer expires.\n\n' +
+                `Time remaining: *${countdown}*`;
+                
+            // Use telegram's editMessageText method directly with the stored message ID
+            await ctx.telegram.editMessageText(
+                chatId,
+                messageId,
+                undefined,
+                statusMessage,
+                { parse_mode: 'Markdown' }
+            );
+        } catch (error) {
+            this.logger.debug('Edit message error (expected):', error.message);
+        }
+    }, 1000) as unknown as NodeJS.Timeout;
+
+    // Store the interval
+    this.countdownIntervals.set(chatId, interval);
+
+    // Auto-cleanup after expiry time
+    setTimeout(() => {
+        if (this.countdownIntervals.has(chatId)) {
+            const currentInterval = this.countdownIntervals.get(chatId);
+            if (currentInterval) {
+                clearInterval(currentInterval);
+            }
+            this.countdownIntervals.delete(chatId);
+        }
+    }, this.EXPIRY_TIME);
   }
 
   private async startTransactionDetection(ctx: Context, transactionId: string) {
@@ -417,15 +473,26 @@ export class TelegramUpdate {
   }
 
   private formatCountdown(expiryTime: number): string {
-    const duration = moment.duration(expiryTime - Date.now());
-    return `${duration.minutes().toString().padStart(2, '0')}:${duration.seconds().toString().padStart(2, '0')}`;
+    const remaining = expiryTime - Date.now();
+    const minutes = Math.floor(remaining / 60000);
+    const seconds = Math.floor((remaining % 60000) / 1000);
+    return `⏱ ${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
   }
 
   @Action('cancel_transaction')
   async cancelTransaction(@Ctx() ctx: Context) {
+    const chatId = ctx.chat.id;
+    if (this.countdownIntervals.has(chatId)) {
+        const currentInterval = this.countdownIntervals.get(chatId);
+        if (currentInterval) {
+            clearInterval(currentInterval);
+        }
+        this.countdownIntervals.delete(chatId);
+    }
+
     ctx.session = {
-      __scenes: {},
-      state: {},
+        __scenes: {},
+        state: {},
     };
     await ctx.reply('Transaction cancelled. Use /start to begin again.');
   }
