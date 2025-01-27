@@ -7,10 +7,14 @@ import {
   CryptoCurrency,
 } from '../transaction/interfaces/transaction.interface';
 import { BankDetailsDto } from '../transaction/dto/bank-details.dto';
-import { Logger } from '@nestjs/common';
+import { Logger, Inject } from '@nestjs/common';
 import { RatesService } from '../rates/rates.service';
 import { BankService } from '../bank/bank.service';
 import * as moment from 'moment';
+import { PaystackService } from '../paystack/paystack.service';
+import { TransactionRepository } from '../transaction/transaction.repository';
+import { TRANSACTION_REPOSITORY } from '../transaction/constants/transaction.constants';
+import { ITransactionRepository } from '../transaction/interfaces/transaction-repository.interface';
 
 @Update()
 export class TelegramUpdate {
@@ -22,6 +26,9 @@ export class TelegramUpdate {
     private readonly transactionService: TransactionService,
     private readonly ratesService: RatesService,
     private readonly bankService: BankService,
+    private readonly paystackService: PaystackService,
+    @Inject(TRANSACTION_REPOSITORY)
+    private readonly transactionRepository: ITransactionRepository,
   ) {
     this.logger.log('TelegramUpdate initialized');
   }
@@ -135,7 +142,7 @@ export class TelegramUpdate {
         '  • USDC: *XXX,XXX*\n' +
         '  • BTC: *X.XXX*\n' +
         '  • ETH: *XX.XX*',
-      { parse_mode: 'Markdown' }
+      { parse_mode: 'Markdown' },
     );
   }
 
@@ -170,7 +177,7 @@ export class TelegramUpdate {
             '✅ Payment confirmed!\n\n' +
               `Sending *${ctx.session.state.amount} ${ctx.session.state.selectedCoin}* to:\n\n` +
               `\`${ctx.session.state.walletAddress}\`\n\n` +
-              '🔄 Transaction in progress...\n\n' +
+              '🔄 Transaction in progress...\n' +
               'You will receive a confirmation once the transfer is complete.',
             { parse_mode: 'Markdown' },
           );
@@ -246,193 +253,300 @@ export class TelegramUpdate {
 
   @Action(/bank_(.+)/)
   async handleBankSelection(@Ctx() ctx: Context) {
-    const bankCode = ctx.match[1];
+    try {
+      const bankCode = ctx.match[1];
+      await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
 
-    // Clear the bank selection keyboard
-    await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+      if (ctx.session.state.action === 'SELL') {
+        // Verify bank account details
+        const bankDetails = await this.bankService.verifyAccountNumber(
+          ctx.session.state.accountNumber,
+          bankCode,
+        );
 
-    // Get bank name from code and show confirmation
-    const banks = await this.bankService.getBankList();
-    const selectedBank = banks.find(bank => bank.code === bankCode);
-    await ctx.reply(`Selected bank: *${selectedBank.name}*`, { parse_mode: 'Markdown' });
-
-    if (ctx.session.state.action === 'BUY') {
-      try {
-        // Map the selected coin to the correct enum value
-        const coinMap = {
-          'USDT_ERC20': CryptoCurrency.USDT_ERC20, // 'USDT(ERC-20)'
-          'USDT_TRC20': CryptoCurrency.USDT_TRC20, // 'USDT(TRC-20)'
-          'USDC_ERC20': CryptoCurrency.USDC_ERC20, // 'USDC(ERC-20)'
-          'USDC_TRC20': CryptoCurrency.USDC_TRC20, // 'USDC(TRC-20)'
-          'ETH': CryptoCurrency.ETH,
-          'BTC': CryptoCurrency.BTC
-        };
-
-        const cryptoCurrency = coinMap[ctx.session.state.selectedCoin];
-
-        if (!cryptoCurrency) {
-          throw new Error('Unsupported cryptocurrency');
+        if (!bankDetails) {
+          await ctx.reply(
+            '❌ Could not verify bank account.\n' +
+              'Please check your account number and try again.',
+          );
+          return;
         }
 
-        this.logger.debug('Creating buy transaction with data:', {
-          userId: ctx.from.id,
-          amount: ctx.session.state.amount,
-          cryptoCurrency,
-          walletAddress: ctx.session.state.walletAddress
-        });
+        // Map selected coin to CryptoCurrency enum format - same as buy flow
+        const cryptoMap = {
+          USDT_ERC20: 'USDT(ERC-20)',
+          USDT_TRC20: 'USDT(TRC-20)',
+          USDC_ERC20: 'USDC(ERC-20)',
+          USDC_TRC20: 'USDC(TRC-20)',
+          ETH: 'ETH',
+          BTC: 'BTC',
+        };
 
-        const transaction = await this.transactionService.createBuyTransaction({
-          userId: ctx.from.id,
-          amount: ctx.session.state.amount,
-          cryptoCurrency,
-          walletAddress: ctx.session.state.walletAddress
-        });
+        const mappedCurrency = cryptoMap[ctx.session.state.selectedCoin];
+        if (!mappedCurrency) {
+          throw new Error(
+            `Invalid cryptocurrency selection: ${ctx.session.state.selectedCoin}`,
+          );
+        }
 
-        // Get bank details for payment
-        const paymentDetails = this.bankService.getTestBankAccount('buy');
+        // Create transaction with verified bank details
+        const transaction = await this.transactionService.createSellTransaction(
+          {
+            userId: ctx.from.id,
+            amount: ctx.session.state.amount,
+            cryptoCurrency: mappedCurrency as CryptoCurrency,
+            bankDetails: {
+              accountNumber: bankDetails.accountNumber,
+              bankCode: bankCode,
+              accountName: bankDetails.accountName,
+              bankName: bankDetails.bankName,
+            },
+          },
+        );
+
+        // Get network-specific instructions
+        const networkInstructions = {
+          'USDT(ERC-20)': [
+            '• Send only USDT on Ethereum (ERC-20) network',
+            '• Sending on other networks will result in loss of funds',
+            '• Typical confirmation time: 5-20 minutes',
+            '• Required confirmations: 2',
+          ],
+          'USDT(TRC-20)': [
+            '• Send only USDT on TRON (TRC-20) network',
+            '• Sending on other networks will result in loss of funds',
+            '• Typical confirmation time: 1-3 minutes',
+            '• Required confirmations: 2',
+          ],
+          'USDC(ERC-20)': [
+            '• Send only USDC on Ethereum (ERC-20) network',
+            '• Sending on other networks will result in loss of funds',
+            '• Typical confirmation time: 5-20 minutes',
+            '• Required confirmations: 2',
+          ],
+          'USDC(TRC-20)': [
+            '• Send only USDC on TRON (TRC-20) network',
+            '• Sending on other networks will result in loss of funds',
+            '• Typical confirmation time: 1-3 minutes',
+            '• Required confirmations: 2',
+          ],
+          ETH: [
+            '• Send only ETH on Ethereum network',
+            '• Typical confirmation time: 5-20 minutes',
+            '• Required confirmations: 2',
+          ],
+          BTC: [
+            '• Send only BTC on Bitcoin network',
+            '• Typical confirmation time: 10-60 minutes',
+            '• Required confirmations: 2',
+          ],
+        }[mappedCurrency].join('\n');
 
         await ctx.reply(
-          'Please confirm the transaction details:\n\n' +
+          '✅ Bank Account Verified!\n\n' +
+            '🏦 Bank Details\n' +
             '------------------------------\n' +
-            `Amount to Send: *₦${ctx.session.state.nairaAmount.toLocaleString()}*\n` +
-            `You will receive: *${transaction.amount} ${this.ratesService.getCurrencyDisplayName(transaction.cryptoCurrency)}*\n` +
-            'Wallet Address:\n' +
-            `\`${transaction.walletAddress}\`\n` +
+            `Account Name: *${bankDetails.accountName}*\n` +
+            `Bank Name: *${bankDetails.bankName}*\n` +
+            `Account Number: \`${bankDetails.accountNumber}\`\n` +
             '------------------------------\n\n' +
-            'Make payment to:\n' +
-            `Account Name: *${paymentDetails.accountName}*\n` +
-            `Bank: *${paymentDetails.bankName}*\n` +
-            'Account Number:\n' +
-            `\`${paymentDetails.accountNumber}\`\n\n` +
-            'Note: Crypto will be sent to your wallet immediately after payment confirmation.\n\n' +
-            'Use /confirm after making the payment.\n\n' +
-            'This quote expires in 30 minutes.\n\n',
+            '💰 Transaction Details\n' +
+            `Amount to Receive: *₦${ctx.session.state.nairaAmount.toLocaleString()}*\n` +
+            `You Send: *${transaction.amount} ${mappedCurrency}*\n\n` +
+            '📤 Send Crypto To\n' +
+            `\`${transaction.walletAddress}\`\n\n` +
+            '⚠️ Important Network Requirements\n' +
+            networkInstructions +
+            '\n\n' +
+            '⏱ Time Remaining\n' +
+            `${this.formatCountdown(transaction.expiresAt.getTime())}\n\n` +
+            '❗ Do not reuse this wallet address',
           { parse_mode: 'Markdown' },
         );
 
         // Start countdown timer
         this.startExpiryCountdown(ctx, transaction.expiresAt.getTime());
-      } catch (error) {
-        this.logger.error('Error creating buy transaction:', error);
-        await ctx.reply(
-          'An error occurred. Please try again or contact support.',
-        );
+
+        // Start monitoring for transaction
+        this.startTransactionDetection(ctx, transaction.id);
+      } else {
+        // Handle BUY flow
+        try {
+          // Map selected coin to CryptoCurrency enum
+          const cryptoMap = {
+            USDT_ERC20: CryptoCurrency['USDT(ERC-20)'],
+            USDT_TRC20: CryptoCurrency['USDT(TRC-20)'],
+            USDC_ERC20: CryptoCurrency['USDC(ERC-20)'],
+            USDC_TRC20: CryptoCurrency['USDC(TRC-20)'],
+            ETH: CryptoCurrency.ETH,
+            BTC: CryptoCurrency.BTC,
+          };
+
+          const cryptoCurrency = cryptoMap[ctx.session.state.selectedCoin];
+          if (!cryptoCurrency) {
+            throw new Error(
+              `Invalid cryptocurrency selection: ${ctx.session.state.selectedCoin}`,
+            );
+          }
+
+          // Create transaction with bank code
+          const transaction =
+            await this.transactionService.createBuyTransaction({
+              userId: ctx.from.id,
+              amount: ctx.session.state.amount,
+              cryptoCurrency,
+              walletAddress: ctx.session.state.walletAddress,
+            });
+
+          // Get bank name directly from bankCode
+          const bank = await this.bankService.getBankByCode(bankCode);
+          if (!bank) {
+            throw new Error(`Bank with code ${bankCode} not found`);
+          }
+
+          // Get network-specific instructions
+          const networkInstructions = {
+            'USDT(ERC-20)': [
+              '• Send only USDT on Ethereum (ERC-20) network',
+              '• Sending on other networks will result in loss of funds',
+              '• Typical confirmation time: 5-20 minutes',
+              '• Required confirmations: 2',
+            ],
+            'USDT(TRC-20)': [
+              '• Send only USDT on TRON (TRC-20) network',
+              '• Sending on other networks will result in loss of funds',
+              '• Typical confirmation time: 1-3 minutes',
+              '• Required confirmations: 2',
+            ],
+            'USDC(ERC-20)': [
+              '• Send only USDC on Ethereum (ERC-20) network',
+              '• Sending on other networks will result in loss of funds',
+              '• Typical confirmation time: 5-20 minutes',
+              '• Required confirmations: 2',
+            ],
+            'USDC(TRC-20)': [
+              '• Send only USDC on TRON (TRC-20) network',
+              '• Sending on other networks will result in loss of funds',
+              '• Typical confirmation time: 1-3 minutes',
+              '• Required confirmations: 2',
+            ],
+            ETH: [
+              '• Send only ETH on Ethereum network',
+              '• Typical confirmation time: 5-20 minutes',
+              '• Required confirmations: 2',
+            ],
+            BTC: [
+              '• Send only BTC on Bitcoin network',
+              '• Typical confirmation time: 10-60 minutes',
+              '• Required confirmations: 2',
+            ],
+          }[cryptoCurrency].join('\n');
+
+          await ctx.reply(
+            '💳 *Payment Details*\n' +
+              '------------------------------\n' +
+              `Bank Name: *${bank.name}*\n` +
+              `Account Number: \`${transaction.bankDetails.accountNumber}\`\n` +
+              `Account Name: *${transaction.bankDetails.accountName}*\n` +
+              '------------------------------\n\n' +
+              '💰 *Transaction Details*\n' +
+              `Amount to Pay: *₦${ctx.session.state.nairaAmount.toLocaleString()}*\n` +
+              `You Get: *${transaction.amount} ${cryptoCurrency}*\n\n` +
+              '📤 Send Crypto To\n' +
+              `\`${transaction.walletAddress}\`\n\n` +
+              '⚠️ Important Network Requirements\n' +
+              networkInstructions +
+              '\n\n' +
+              '⏱ Time Remaining\n' +
+              `${this.formatCountdown(transaction.expiresAt.getTime())}\n\n` +
+              '❗ Do not reuse this wallet address',
+            { parse_mode: 'Markdown' },
+          );
+
+          // Start countdown timer
+          this.startExpiryCountdown(ctx, transaction.expiresAt.getTime());
+
+          // Start monitoring for transaction
+          this.startTransactionDetection(ctx, transaction.id);
+        } catch (error) {
+          this.logger.error('Error in BUY flow:', error);
+          await ctx.reply(
+            '❌ An error occurred while processing your transaction.\n' +
+              'Please try again or contact support.',
+          );
+        }
       }
-      return;
-    }
-
-    // Handle SELL flow
-    const bankDetails = await this.bankService.verifyAccountNumber(
-      ctx.session.state.accountNumber,
-      bankCode,
-    );
-
-    if (!bankDetails) {
-      await ctx.reply('Could not verify bank account. Please try again.');
-      return;
-    }
-
-    try {
-      // Create sell transaction
-      const transaction = await this.transactionService.createSellTransaction({
-        userId: ctx.from.id,
-        amount: ctx.session.state.amount,
-        cryptoCurrency: ctx.session.state.selectedCoin as CryptoCurrency,
-        bankDetails: {
-          accountNumber: bankDetails.accountNumber,
-          bankCode: bankCode,
-          accountName: bankDetails.accountName,
-        },
-      });
-
-      await ctx.reply(
-        'Please confirm that the bank account details provided is correct\n\n' +
-          '------------------------------\n' +
-          `Account Name: *${bankDetails.accountName}*\n` +
-          `Bank Name: *${bankDetails.bankName}*\n` +
-          `Account Number: \`${bankDetails.accountNumber}\`\n` +
-          '------------------------------\n\n' +
-          `To proceed, send *${transaction.amount} ${transaction.cryptoCurrency}* to the address below:\n\n` +
-          `\`${transaction.walletAddress}\`\n\n` +
-          'Note: A transfer to your bank account will be initiated immediately after 2 confirmations.\n\n' +
-          'This address expires after 30mins. Do not re-use\n\n' +
-          `*${this.formatCountdown(transaction.expiresAt.getTime())}*`,
-        { parse_mode: 'Markdown' },
-      );
-
-      // Start countdown timer
-      this.startExpiryCountdown(ctx, transaction.expiresAt.getTime());
-
-      // Start transaction detection
-      this.startTransactionDetection(ctx, transaction.id);
     } catch (error) {
+      this.logger.error('Error in handleBankSelection:', error);
       await ctx.reply(
-        'An error occurred. Please try again or contact support.',
+        '❌ An error occurred while verifying your bank account.\n' +
+          'Please try again or contact support.',
       );
-      this.logger.error('Error creating sell transaction:', error);
     }
   }
 
   private async startExpiryCountdown(ctx: Context, expiryTime: number) {
     const chatId = ctx.chat.id;
-    
+
     // Clear existing interval if any
     if (this.countdownIntervals.has(chatId)) {
-        const existingInterval = this.countdownIntervals.get(chatId);
-        if (existingInterval) {
-            clearInterval(existingInterval);
-        }
-        this.countdownIntervals.delete(chatId);
+      const existingInterval = this.countdownIntervals.get(chatId);
+      if (existingInterval) {
+        clearInterval(existingInterval);
+      }
+      this.countdownIntervals.delete(chatId);
     }
 
     // Send initial status message and store its message ID
     const initialMessage = await ctx.reply(
-        'Transaction pending...\n' +
+      'Transaction pending...\n' +
         'Please complete the transaction before the timer expires.\n\n' +
         `Time remaining: *${this.formatCountdown(expiryTime)}*`,
-        { parse_mode: 'Markdown' }
+      { parse_mode: 'Markdown' },
     );
 
     const messageId = initialMessage.message_id;
 
     const interval = setInterval(async () => {
-        const remaining = expiryTime - Date.now();
-        
-        if (remaining <= 0) {
-            if (this.countdownIntervals.has(chatId)) {
-                const currentInterval = this.countdownIntervals.get(chatId);
-                if (currentInterval) {
-                    clearInterval(currentInterval);
-                }
-                this.countdownIntervals.delete(chatId);
-            }
-            await ctx.reply('⚠️ Transaction expired. Please start a new transaction.');
-            ctx.session = {
-                __scenes: {},
-                state: {},
-            };
-            return;
-        }
+      const remaining = expiryTime - Date.now();
 
-        const countdown = this.formatCountdown(expiryTime);
-        
-        try {
-            const statusMessage = 
-                'Transaction pending...\n' +
-                'Please complete the transaction before the timer expires.\n\n' +
-                `Time remaining: *${countdown}*`;
-                
-            // Use telegram's editMessageText method directly with the stored message ID
-            await ctx.telegram.editMessageText(
-                chatId,
-                messageId,
-                undefined,
-                statusMessage,
-                { parse_mode: 'Markdown' }
-            );
-        } catch (error) {
-            this.logger.debug('Edit message error (expected):', error.message);
+      if (remaining <= 0) {
+        if (this.countdownIntervals.has(chatId)) {
+          const currentInterval = this.countdownIntervals.get(chatId);
+          if (currentInterval) {
+            clearInterval(currentInterval);
+          }
+          this.countdownIntervals.delete(chatId);
         }
+        await ctx.reply(
+          '⚠️ Transaction expired. Please start a new transaction.',
+        );
+        ctx.session = {
+          __scenes: {},
+          state: {},
+        };
+        return;
+      }
+
+      const countdown = this.formatCountdown(expiryTime);
+
+      try {
+        const statusMessage =
+          'Transaction pending...\n' +
+          'Please complete the transaction before the timer expires.\n\n' +
+          `Time remaining: *${countdown}*`;
+
+        // Use telegram's editMessageText method directly with the stored message ID
+        await ctx.telegram.editMessageText(
+          chatId,
+          messageId,
+          undefined,
+          statusMessage,
+          { parse_mode: 'Markdown' },
+        );
+      } catch (error) {
+        this.logger.debug('Edit message error (expected):', error.message);
+      }
     }, 1000) as unknown as NodeJS.Timeout;
 
     // Store the interval
@@ -440,13 +554,13 @@ export class TelegramUpdate {
 
     // Auto-cleanup after expiry time
     setTimeout(() => {
-        if (this.countdownIntervals.has(chatId)) {
-            const currentInterval = this.countdownIntervals.get(chatId);
-            if (currentInterval) {
-                clearInterval(currentInterval);
-            }
-            this.countdownIntervals.delete(chatId);
+      if (this.countdownIntervals.has(chatId)) {
+        const currentInterval = this.countdownIntervals.get(chatId);
+        if (currentInterval) {
+          clearInterval(currentInterval);
         }
+        this.countdownIntervals.delete(chatId);
+      }
     }, this.EXPIRY_TIME);
   }
 
@@ -483,27 +597,18 @@ export class TelegramUpdate {
   async cancelTransaction(@Ctx() ctx: Context) {
     const chatId = ctx.chat.id;
     if (this.countdownIntervals.has(chatId)) {
-        const currentInterval = this.countdownIntervals.get(chatId);
-        if (currentInterval) {
-            clearInterval(currentInterval);
-        }
-        this.countdownIntervals.delete(chatId);
+      const currentInterval = this.countdownIntervals.get(chatId);
+      if (currentInterval) {
+        clearInterval(currentInterval);
+      }
+      this.countdownIntervals.delete(chatId);
     }
 
     ctx.session = {
-        __scenes: {},
-        state: {},
+      __scenes: {},
+      state: {},
     };
     await ctx.reply('Transaction cancelled. Use /start to begin again.');
-  }
-
-  @Action('continue_buy')
-  async continueBuy(@Ctx() ctx: Context) {
-    await ctx.reply(
-      `Enter your ${ctx.session.state.selectedCoin} address\n\n` +
-        'Please make sure to enter the correct address as transactions cannot be reversed.',
-    );
-    ctx.session.state.awaitingWalletAddress = true;
   }
 
   @On('text')
@@ -599,15 +704,80 @@ export class TelegramUpdate {
       ctx.session.state.walletAddress = walletAddress;
       ctx.session.state.awaitingWalletAddress = false;
 
-      const banks = await this.bankService.getBankList();
-      const bankButtons = banks.map((bank) => [
-        Markup.button.callback(bank.name, `bank_${bank.code}`),
-      ]);
+      // Create buy transaction and get payment details
+      try {
+        // Map selected coin to CryptoCurrency enum format
+        const cryptoMap = {
+          USDT_ERC20: 'USDT(ERC-20)',
+          USDT_TRC20: 'USDT(TRC-20)',
+          USDC_ERC20: 'USDC(ERC-20)',
+          USDC_TRC20: 'USDC(TRC-20)',
+          ETH: 'ETH',
+          BTC: 'BTC',
+        };
 
-      await ctx.reply(
-        'Select your bank to proceed with payment:',
-        Markup.inlineKeyboard(bankButtons),
-      );
+        const mappedCurrency = cryptoMap[ctx.session.state.selectedCoin];
+        if (!mappedCurrency) {
+          throw new Error(
+            `Invalid cryptocurrency selection: ${ctx.session.state.selectedCoin}`,
+          );
+        }
+
+        // Create initial transaction
+        const transaction = await this.transactionService.createBuyTransaction({
+          userId: ctx.from.id,
+          amount: ctx.session.state.amount,
+          cryptoCurrency: mappedCurrency as CryptoCurrency,
+          walletAddress: walletAddress,
+        });
+
+        // Get payment details from Paystack
+        const paymentDetails =
+          await this.paystackService.initiateBankTransferCharge({
+            email: 'customer@example.com', // You might want to collect this from user
+            amount: ctx.session.state.nairaAmount,
+            reference: `BUY-${transaction.id}`,
+          });
+
+        // Update transaction with bank details
+        transaction.bankDetails = {
+          accountNumber: paymentDetails.accountNumber,
+          accountName: paymentDetails.accountName,
+          bankCode: paymentDetails.bank.id.toString(),
+          bankName: paymentDetails.bank.name,
+        };
+        await this.transactionRepository.save(transaction);
+
+        await ctx.reply(
+          '💳 *Payment Details*\n' +
+            '------------------------------\n' +
+            `Bank Name: *${paymentDetails.bank.name}*\n` +
+            `Account Number: \`${paymentDetails.accountNumber}\`\n` +
+            `Account Name: *${paymentDetails.accountName}*\n` +
+            '------------------------------\n\n' +
+            '💰 *Transaction Details*\n' +
+            `Amount to Pay: *₦${ctx.session.state.nairaAmount.toLocaleString()}*\n` +
+            `You Get: *${transaction.amount} ${mappedCurrency}*\n\n` +
+            '⚠️ *Important*\n' +
+            '• Make transfer within 30 minutes\n' +
+            '• Use /confirm after payment\n' +
+            '• Transaction expires in 30 minutes\n\n' +
+            '❗ Do not close this chat until transaction is complete',
+          { parse_mode: 'Markdown' },
+        );
+
+        // Start countdown timer
+        this.startExpiryCountdown(
+          ctx,
+          new Date(paymentDetails.expiresAt).getTime(),
+        );
+      } catch (error) {
+        this.logger.error('Error creating buy transaction:', error);
+        await ctx.reply(
+          '❌ An error occurred while processing your transaction.\n' +
+            'Please try again or contact support.',
+        );
+      }
       return;
     }
 

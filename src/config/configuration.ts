@@ -14,6 +14,24 @@ export default () => ({
   wallet: {
     address: process.env.WALLET_ADDRESS,
     privateKey: process.env.WALLET_PRIVATE_KEY,
+    ETH: {
+      address: process.env.ETH_WALLET,
+    },
+    BTC: {
+      address: process.env.BTC_WALLET,
+    },
+    USDT_ERC20: {
+      address: process.env.USDT_ERC20_WALLET,
+    },
+    USDC_ERC20: {
+      address: process.env.USDC_ERC20_WALLET,
+    },
+    USDC_TRC20: {
+      address: process.env.USDC_TRC20_WALLET,
+    },
+    USDT_TRC20: {
+      address: process.env.USDT_TRC20_WALLET,
+    },
   },
   tokens: {
     'USDT(ERC-20)': {
@@ -28,10 +46,10 @@ export default () => ({
     'USDC(TRC-20)': {
       address: process.env.USDC_TRC20_CONTRACT,
     },
-    'ETH': {
+    ETH: {
       address: process.env.ETH_CONTRACT,
     },
-    'BTC': {
+    BTC: {
       address: process.env.BTC_CONTRACT,
     },
   },

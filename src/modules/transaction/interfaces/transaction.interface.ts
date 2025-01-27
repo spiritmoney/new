@@ -38,6 +38,7 @@ export interface Transaction {
     accountNumber: string;
     bankCode: string;
     accountName?: string;
+    bankName?: string;
   };
   paymentReference?: string;
   transferReference?: string;

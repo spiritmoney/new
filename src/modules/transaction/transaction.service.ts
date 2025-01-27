@@ -13,12 +13,14 @@ import { TRANSACTION_REPOSITORY } from './constants/transaction.constants';
 import { PaystackService } from '../paystack/paystack.service';
 import { ethers } from 'ethers';
 import { RatesService } from '../rates/rates.service';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class TransactionService {
   private readonly logger = new Logger(TransactionService.name);
 
   constructor(
+    private configService: ConfigService,
     @Inject(TRANSACTION_REPOSITORY)
     private readonly transactionRepository: ITransactionRepository,
     private readonly walletService: WalletService,
@@ -37,7 +39,7 @@ export class TransactionService {
     const walletAddress = await this.walletService.generateAddress();
     const fiatAmount = this.ratesService.calculateFiatAmount(
       data.amount,
-      data.cryptoCurrency
+      data.cryptoCurrency,
     );
 
     const transaction: Transaction = {
@@ -282,29 +284,54 @@ export class TransactionService {
     userId: number;
     amount: number;
     cryptoCurrency: CryptoCurrency;
-    bankDetails: {
-      accountNumber: string;
-      bankCode: string;
-      accountName: string;
-    };
+    bankDetails: BankDetailsDto;
   }): Promise<Transaction> {
-    this.validateTransaction({
-      amount: data.amount,
-      cryptoCurrency: data.cryptoCurrency,
-      fiatCurrency: 'NGN',
-    });
+    // Get the appropriate wallet address based on cryptocurrency
+    const walletConfig = this.configService.get('wallet');
 
-    const walletAddress = await this.walletService.generateAddress();
-    const fiatAmount = this.ratesService.calculateFiatAmount(
-      data.amount,
-      data.cryptoCurrency,
-    );
+    let walletAddress: string;
+
+    switch (data.cryptoCurrency) {
+      case CryptoCurrency.BTC:
+        walletAddress = walletConfig.BTC.address;
+        break;
+      case CryptoCurrency.ETH:
+        walletAddress = walletConfig.ETH.address;
+        break;
+      case CryptoCurrency.USDT_ERC20:
+      case 'USDT(ERC-20)':
+        walletAddress = walletConfig.USDT_ERC20.address;
+        break;
+      case CryptoCurrency.USDT_TRC20:
+      case 'USDT(TRC-20)':
+        walletAddress = walletConfig.USDT_TRC20.address;
+        break;
+      case CryptoCurrency.USDC_ERC20:
+      case 'USDC(ERC-20)':
+        walletAddress = walletConfig.USDC_ERC20.address;
+        break;
+      case CryptoCurrency.USDC_TRC20:
+      case 'USDC(TRC-20)':
+        walletAddress = walletConfig.USDC_TRC20.address;
+        break;
+      default:
+        throw new Error(`Unsupported cryptocurrency: ${data.cryptoCurrency}`);
+    }
+
+    if (!walletAddress) {
+      throw new Error(
+        `No wallet address configured for ${data.cryptoCurrency}`,
+      );
+    }
 
     const transaction: Transaction = {
       id: uuidv4(),
       userId: data.userId,
       amount: data.amount,
-      fiatAmount,
+      fiatAmount: this.ratesService.calculateFiatAmount(
+        data.amount,
+        data.cryptoCurrency,
+      ),
       cryptoCurrency: data.cryptoCurrency,
       fiatCurrency: 'NGN',
       status: TransactionStatus.PENDING,

@@ -49,6 +49,7 @@ import { AppService } from './app.service';
     RatesService,
     BankService,
     PaystackService,
+    
     {
       provide: TRANSACTION_REPOSITORY,
       useClass: TransactionRepository,

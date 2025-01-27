@@ -1,73 +1,64 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-
+import { PaystackService } from '../paystack/paystack.service';
+import banksData from '../../../banks.json';
 @Injectable()
 export class BankService {
   private readonly logger = new Logger(BankService.name);
-  private readonly PAYSTACK_API = 'https://api.paystack.co';
-  private readonly headers: HeadersInit;
+  private readonly banks: Array<{ name: string; code: string }>;
 
-  constructor(private configService: ConfigService) {
-    const secretKey = this.configService.get<string>('paystack.secretKey');
-    this.headers = {
-      Authorization: `Bearer ${secretKey}`,
-      'Content-Type': 'application/json'
-    };
+  constructor(
+    private configService: ConfigService,
+    private paystackService: PaystackService,
+  ) {
+    this.banks = banksData.data;
   }
 
-  async getBankList(): Promise<Array<{ name: string, code: string }>> {
-    try {
-      const response = await fetch(`${this.PAYSTACK_API}/bank`, {
-        method: 'GET',
-        headers: this.headers
-      });
+  async getBankList(): Promise<Array<{ name: string; code: string }>> {
+    return this.banks;
+  }
 
-      if (!response.ok) {
-        throw new Error(`Paystack error: ${response.statusText}`);
-      }
-
-      const result = await response.json();
-      return result.data.map(bank => ({
-        name: bank.name,
-        code: bank.code
-      }));
-    } catch (error) {
-      this.logger.error('Error fetching bank list:', error);
-      return [];
+  public async getBankByCode(
+    code: string,
+  ): Promise<{ name: string; code: string } | null> {
+    const bank = this.banks.find((b) => b.code === code);
+    if (!bank) {
+      this.logger.warn(`Bank with code ${code} not found`);
+      return null;
     }
+    return bank;
   }
 
-  async verifyAccountNumber(accountNumber: string, bankCode: string): Promise<{
-    accountName: string;
+  async verifyAccountNumber(
+    accountNumber: string,
+    bankCode: string,
+  ): Promise<{
     accountNumber: string;
+    accountName: string;
     bankName: string;
   } | null> {
     try {
-      const response = await fetch(
-        `${this.PAYSTACK_API}/bank/resolve?account_number=${accountNumber}&bank_code=${bankCode}`,
-        {
-          method: 'GET',
-          headers: this.headers
-        }
+      const verifiedAccount = await this.paystackService.verifyBankAccount(
+        accountNumber,
+        bankCode,
       );
 
-      if (!response.ok) {
-        throw new Error(`Paystack error: ${response.statusText}`);
+      if (!verifiedAccount) {
+        return null;
       }
 
-      const result = await response.json();
-      
-      // Get bank name from bank code
-      const banks = await this.getBankList();
-      const bank = banks.find(b => b.code === bankCode);
+      const bank = await this.getBankByCode(bankCode);
+      if (!bank) {
+        return null;
+      }
 
       return {
-        accountName: result.data.account_name,
-        accountNumber: accountNumber,
-        bankName: bank?.name || 'Unknown Bank'
+        accountNumber: verifiedAccount.accountNumber,
+        accountName: verifiedAccount.accountName,
+        bankName: bank.name,
       };
     } catch (error) {
-      this.logger.error('Error verifying account:', error);
+      this.logger.error('Error in verifyAccountNumber:', error);
       return null;
     }
   }
@@ -75,16 +66,16 @@ export class BankService {
   // For testing purposes
   getTestBankAccount(type: 'sell' | 'buy' = 'sell') {
     return {
-      'sell': {
+      sell: {
         accountName: 'HopprX Limited',
         bankName: 'Kuda Bank',
-        accountNumber: '1234567890'
+        accountNumber: '1234567890',
       },
-      'buy': {
+      buy: {
         accountName: 'venture capital',
         bankName: 'Kuda Bank',
-        accountNumber: '0123232424242'
-      }
+        accountNumber: '0123232424242',
+      },
     }[type];
   }
-} 
+}
