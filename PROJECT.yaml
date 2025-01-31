@@ -1,0 +1,142 @@
+project:
+  name: HopprX
+  description: A Telegram bot for cryptocurrency trading with Nigerian Naira (NGN)
+  type: NestJS Application
+  features:
+    - Instant cryptocurrency buying and selling
+    - Support for multiple cryptocurrencies (BTC, ETH, USDT, USDC)
+    - Real-time exchange rates
+    - Bank transfer integration
+    - Transaction monitoring
+    - Automated payment processing
+
+supported_cryptocurrencies:
+  - USDT (ERC-20)
+  - USDT (TRC-20)
+  - USDC (ERC-20)
+  - USDC (TRC-20)
+  - ETH
+  - BTC
+
+prerequisites:
+  - Node.js (v16 or higher)
+  - Yarn package manager
+  - Telegram Bot Token
+  - Paystack API Keys
+  - Blockchain Provider URL
+  - Cryptocurrency Wallet Addresses
+
+setup_instructions:
+  1_clone_repository:
+    command: "git clone [repository-url]"
+    description: "Clone the project repository"
+
+  2_install_dependencies:
+    command: "yarn install"
+    description: "Install project dependencies"
+
+  3_configure_environment:
+    steps:
+      - Copy .env.example to .env file
+      - Fill in the following environment variables:
+        - TELEGRAM_BOT_TOKEN: Your Telegram bot token
+        - RENDER_URL: Your deployment URL
+        - PORT: Application port (default: 3000)
+        - BLOCKCHAIN_PROVIDER: Your blockchain provider URL
+        - WALLET_ADDRESS: Your main wallet address
+        - WALLET_PRIVATE_KEY: Your wallet private key
+        - USDT_ERC20_CONTRACT: USDT ERC20 contract address
+        - USDT_TRC20_CONTRACT: USDT TRC20 contract address
+        - USDC_ERC20_CONTRACT: USDC ERC20 contract address
+        - USDC_TRC20_CONTRACT: USDC TRC20 contract address
+        - ETH_CONTRACT: ETH contract address
+        - BTC_CONTRACT: BTC contract address
+        - PAYSTACK_SECRET_KEY: Your Paystack secret key
+        - PAYSTACK_PUBLIC_KEY: Your Paystack public key
+
+  4_build_project:
+    command: "yarn build"
+    description: "Compile the TypeScript code"
+
+  5_run_application:
+    development:
+      command: "yarn start:dev"
+      description: "Run in development mode with hot-reload"
+    
+    production:
+      command: "yarn start:prod"
+      description: "Run in production mode"
+    
+    testing:
+      unit_tests:
+        command: "yarn test"
+        description: "Run unit tests"
+      
+      e2e_tests:
+        command: "yarn test:e2e"
+        description: "Run end-to-end tests"
+      
+      test_coverage:
+        command: "yarn test:cov"
+        description: "Generate test coverage report"
+
+project_structure:
+  src:
+    - app.module.ts: Main application module
+    - main.ts: Application entry point
+    - modules:
+      - telegram: Telegram bot implementation
+      - transaction: Transaction handling
+      - wallet: Cryptocurrency wallet operations
+      - bank: Banking operations
+      - paystack: Payment processing
+      - rates: Exchange rate management
+
+api_endpoints:
+  - /: Health check endpoint
+  - /webhook: Telegram webhook endpoint
+
+telegram_commands:
+  - /start: Initialize the bot
+  - /buy: Start cryptocurrency purchase
+  - /sell: Start cryptocurrency sale
+  - /rates: View current exchange rates
+  - /status: Check bot status
+  - /cancel: Cancel current operation
+
+deployment:
+  platforms:
+    - Render
+    - Heroku
+    - Any Node.js hosting platform
+  
+  requirements:
+    - SSL certificate (for Telegram webhook)
+    - Environment variables configuration
+    - Node.js runtime
+    - Persistent storage (optional)
+
+monitoring:
+  logs:
+    - Application logs via built-in logger
+    - Transaction monitoring
+    - Error tracking
+    - User activity monitoring
+
+security_considerations:
+  - Secure environment variables
+  - API key protection
+  - Rate limiting
+  - Input validation
+  - Transaction verification
+  - Wallet address validation
+
+support:
+  documentation:
+    - README.md
+    - USER_GUIDE.md
+    - API documentation
+  
+  contact:
+    - Project maintainers
+    - Support channels 
